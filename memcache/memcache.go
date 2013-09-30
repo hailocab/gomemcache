@@ -120,7 +120,10 @@ func New(server ...string) *Client {
 
 // NewFromSelector returns a new Client using the provided ServerSelector.
 func NewFromSelector(ss ServerSelector) *Client {
-	return &Client{selector: ss}
+	return &Client{
+		selector: ss,
+		maxIdle: maxIdleConnsPerAddr,
+	}
 }
 
 // Client is a memcache client.
@@ -134,6 +137,8 @@ type Client struct {
 
 	lk       sync.Mutex
 	freeconn map[string][]*conn
+
+	maxIdle int
 }
 
 // Item is an item to be got or stored in a memcached server.
@@ -196,7 +201,7 @@ func (c *Client) putFreeConn(addr net.Addr, cn *conn) {
 		c.freeconn = make(map[string][]*conn)
 	}
 	freelist := c.freeconn[addr.String()]
-	if len(freelist) >= maxIdleConnsPerAddr {
+	if len(freelist) >= c.maxIdle {
 		cn.nc.Close()
 		return
 	}
@@ -390,6 +395,11 @@ func (c *Client) GetMulti(keys []string) (map[string]*Item, error) {
 		}
 	}
 	return m, err
+}
+
+
+func (c *Client) SetMaxIdleConns(maxIdle int) {
+	c.maxIdle = maxIdle
 }
 
 // parseGetResponse reads a GET response from r and calls cb for each
