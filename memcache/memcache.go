@@ -126,7 +126,7 @@ func NewFromSelector(ss ServerSelector) *Client {
 // Client is a memcache client.
 // It is safe for unlocked use by multiple concurrent goroutines.
 type Client struct {
-	// DialTimeout specified the timeout when dialling a new connection to Memcached.
+	// DialTimeout specifies the timeout when dialling a new connection to Memcached.
 	// If zero, DefaultTimeout is used.
 	DialTimeout time.Duration
 
