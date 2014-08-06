@@ -32,8 +32,7 @@ const testServer = "localhost:11211"
 func setup(t *testing.T) bool {
 	c, err := net.Dial("tcp", testServer)
 	if err != nil {
-		t.Logf("skipping test; no server running at %s", testServer)
-		return false
+		t.Skipf("skipping test; no server running at %s", testServer)
 	}
 	c.Write([]byte("flush_all\r\n"))
 	c.Close()
@@ -52,7 +51,7 @@ func TestUnixSocket(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/test-gomemcache-%d.sock", os.Getpid())
 	cmd := exec.Command("memcached", "-s", sock)
 	if err := cmd.Start(); err != nil {
-		t.Logf("skipping test; couldn't find memcached")
+		t.Skipf("skipping test; couldn't find memcached")
 		return
 	}
 	defer cmd.Wait()
@@ -63,10 +62,18 @@ func TestUnixSocket(t *testing.T) {
 		if _, err := os.Stat(sock); err == nil {
 			break
 		}
-		time.Sleep(time.Duration(25 * i) * time.Millisecond)
+		time.Sleep(time.Duration(25*i) * time.Millisecond)
 	}
 
 	testWithClient(t, New(sock))
+}
+
+func mustSetF(t *testing.T, c *Client) func(*Item) {
+	return func(it *Item) {
+		if err := c.Set(it); err != nil {
+			t.Fatalf("failed to Set %#v: %v", *it, err)
+		}
+	}
 }
 
 func testWithClient(t *testing.T, c *Client) {
@@ -75,12 +82,7 @@ func testWithClient(t *testing.T, c *Client) {
 			t.Fatalf(format, args...)
 		}
 	}
-
-	mustSet := func(it *Item) {
-		if err := c.Set(it); err != nil {
-			t.Fatalf("failed to Set %#v: %v", *it, err)
-		}
-	}
+	mustSet := mustSetF(t, c)
 
 	// Set
 	foo := &Item{Key: "foo", Value: []byte("fooval"), Flags: 123}
@@ -109,6 +111,14 @@ func testWithClient(t *testing.T, c *Client) {
 	if err := c.Add(bar); err != ErrNotStored {
 		t.Fatalf("second add(foo) want ErrNotStored, got %v", err)
 	}
+
+	// Replace
+	baz := &Item{Key: "baz", Value: []byte("bazvalue")}
+	if err := c.Replace(baz); err != ErrNotStored {
+		t.Fatalf("expected replace(baz) to return ErrNotStored, got %v", err)
+	}
+	err = c.Replace(bar)
+	checkErr(err, "replaced(foo): %v", err)
 
 	// GetMulti
 	m, err := c.GetMulti([]string{"foo", "bar"})
@@ -160,5 +170,61 @@ func testWithClient(t *testing.T, c *Client) {
 	if err == nil || !strings.Contains(err.Error(), "client error") {
 		t.Fatalf("increment non-number: want client error, got %v", err)
 	}
+	testTouchWithClient(t, c)
 
+	// Test Delete All
+	err = c.DeleteAll()
+	checkErr(err, "DeleteAll: %v", err)
+	it, err = c.Get("bar")
+	if err != ErrCacheMiss {
+		t.Errorf("post-DeleteAll want ErrCacheMiss, got %v", err)
+	}
+
+}
+
+func testTouchWithClient(t *testing.T, c *Client) {
+	if testing.Short() {
+		t.Log("Skipping testing memcache Touch with testing in Short mode")
+		return
+	}
+
+	mustSet := mustSetF(t, c)
+
+	const secondsToExpiry = int32(2)
+
+	// We will set foo and bar to expire in 2 seconds, then we'll keep touching
+	// foo every second
+	// After 3 seconds, we expect foo to be available, and bar to be expired
+	foo := &Item{Key: "foo", Value: []byte("fooval"), Expiration: secondsToExpiry}
+	bar := &Item{Key: "bar", Value: []byte("barval"), Expiration: secondsToExpiry}
+
+	setTime := time.Now()
+	mustSet(foo)
+	mustSet(bar)
+
+	for s := 0; s < 3; s++ {
+		time.Sleep(time.Duration(1 * time.Second))
+		err := c.Touch(foo.Key, secondsToExpiry)
+		if nil != err {
+			t.Errorf("error touching foo: %v", err.Error())
+		}
+	}
+
+	_, err := c.Get("foo")
+	if err != nil {
+		if err == ErrCacheMiss {
+			t.Fatalf("touching failed to keep item foo alive")
+		} else {
+			t.Fatalf("unexpected error retrieving foo after touching: %v", err.Error())
+		}
+	}
+
+	_, err = c.Get("bar")
+	if nil == err {
+		t.Fatalf("item bar did not expire within %v seconds", time.Now().Sub(setTime).Seconds())
+	} else {
+		if err != ErrCacheMiss {
+			t.Fatalf("unexpected error retrieving bar: %v", err.Error())
+		}
+	}
 }
