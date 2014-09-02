@@ -129,6 +129,10 @@ func NewFromSelector(ss ServerSelector) *Client {
 // Client is a memcache client.
 // It is safe for unlocked use by multiple concurrent goroutines.
 type Client struct {
+	// DialTimeout specifies the timeout when dialling a new connection to Memcached.
+	// If zero, DefaultTimeout is used.
+	DialTimeout time.Duration
+
 	// Timeout specifies the socket read/write timeout.
 	// If zero, DefaultTimeout is used.
 	Timeout time.Duration
@@ -228,6 +232,13 @@ func (c *Client) netTimeout() time.Duration {
 	return DefaultTimeout
 }
 
+func (c *Client) dialTimeout() time.Duration {
+	if c.DialTimeout != 0 {
+		return c.DialTimeout
+	}
+	return DefaultTimeout
+}
+
 // ConnectTimeoutError is the error type used when it takes
 // too long to connect to the desired host. This level of
 // detail can generally be ignored.
@@ -245,7 +256,7 @@ func (c *Client) dial(addr net.Addr) (net.Conn, error) {
 		err error
 	}
 
-	nc, err := net.DialTimeout(addr.Network(), addr.String(), c.netTimeout())
+	nc, err := net.DialTimeout(addr.Network(), addr.String(), c.dialTimeout())
 	if err == nil {
 		return nc, nil
 	}
