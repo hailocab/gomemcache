@@ -17,10 +17,11 @@ limitations under the License.
 package memcache
 
 import (
-	"hash/crc32"
 	"net"
 	"strings"
 	"sync"
+
+	"github.com/hailocab/go-hostpool"
 )
 
 // ServerSelector is the interface that selects a memcache server
@@ -31,14 +32,17 @@ import (
 type ServerSelector interface {
 	// PickServer returns the server address that a given item
 	// should be shared onto.
-	PickServer(key string) (net.Addr, error)
+	PickServer(key string) (net.Addr, DoneFunc, error)
 	Each(func(net.Addr) error) error
 }
 
+type DoneFunc func(error)
+
 // ServerList is a simple ServerSelector. Its zero value is usable.
 type ServerList struct {
-	mu    sync.RWMutex
-	addrs []net.Addr
+	mu       sync.RWMutex
+	addrs    map[string]net.Addr
+	hostpool hostpool.HostPool
 }
 
 // SetServers changes a ServerList's set of servers at runtime and is
@@ -51,26 +55,31 @@ type ServerList struct {
 // resolve. No attempt is made to connect to the server. If any error
 // is returned, no changes are made to the ServerList.
 func (ss *ServerList) SetServers(servers ...string) error {
-	naddr := make([]net.Addr, len(servers))
-	for i, server := range servers {
+	naddr := make(map[string]net.Addr, len(servers))
+	for _, server := range servers {
 		if strings.Contains(server, "/") {
 			addr, err := net.ResolveUnixAddr("unix", server)
 			if err != nil {
 				return err
 			}
-			naddr[i] = addr
+			naddr[server] = addr
 		} else {
 			tcpaddr, err := net.ResolveTCPAddr("tcp", server)
 			if err != nil {
 				return err
 			}
-			naddr[i] = tcpaddr
+			naddr[server] = tcpaddr
 		}
 	}
 
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	ss.addrs = naddr
+	if ss.hostpool == nil {
+		ss.hostpool = hostpool.New(servers)
+	} else {
+		ss.hostpool.SetHosts(servers)
+	}
 	return nil
 }
 
@@ -86,29 +95,17 @@ func (ss *ServerList) Each(f func(net.Addr) error) error {
 	return nil
 }
 
-// keyBufPool returns []byte buffers for use by PickServer's call to
-// crc32.ChecksumIEEE to avoid allocations. (but doesn't avoid the
-// copies, which at least are bounded in size and small)
-var keyBufPool = sync.Pool{
-	New: func() interface{} {
-		b := make([]byte, 256)
-		return &b
-	},
-}
-
-func (ss *ServerList) PickServer(key string) (net.Addr, error) {
+func (ss *ServerList) PickServer(key string) (net.Addr, DoneFunc, error) {
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
-	if len(ss.addrs) == 0 {
-		return nil, ErrNoServers
+	if ss.hostpool == nil || len(ss.hostpool.Hosts()) == 0 {
+		return nil, func(error) {}, ErrNoServers
 	}
-	if len(ss.addrs) == 1 {
-		return ss.addrs[0], nil
-	}
-	bufp := keyBufPool.Get().(*[]byte)
-	n := copy(*bufp, key)
-	cs := crc32.ChecksumIEEE((*bufp)[:n])
-	keyBufPool.Put(bufp)
 
-	return ss.addrs[cs%uint32(len(ss.addrs))], nil
+	hostR := ss.hostpool.Get()
+	if addr, ok := ss.addrs[hostR.Host()]; ok {
+		return addr, hostR.Mark, nil
+	}
+
+	return nil, func(error) {}, ErrNoServers
 }
