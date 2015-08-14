@@ -102,10 +102,19 @@ func (ss *ServerList) PickServer(key string) (net.Addr, DoneFunc, error) {
 		return nil, func(error) {}, ErrNoServers
 	}
 
-	hostR := ss.hostpool.Get()
+	hostsR := ss.hostpool.GetHealthy()
 	if addr, ok := ss.addrs[hostR.Host()]; ok {
 		return addr, hostR.Mark, nil
 	}
 
-	return nil, func(error) {}, ErrNoServers
+	bufp := keyBufPool.Get().(*[]byte)
+	n := copy(*bufp, key)
+	cs := crc32.ChecksumIEEE((*bufp)[:n])
+	keyBufPool.Put(bufp)
+
+	index := cs % uint32(len(hostsR))
+	hostR := hostsR[index]
+	addr := ss.addrs[hostR.Host()]
+
+	return addr, hostR.Mark, nil
 }
