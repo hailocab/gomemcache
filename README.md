@@ -11,7 +11,15 @@ This is a memcache client library for the Go programming language
 
 After this command *gomemcache* is ready to use. Its source will be in:
 
-    $GOPATH/src/github.com/bradfitz/gomemcache/memcache
+    $GOROOT/src/pkg/github.com/bradfitz/gomemcache/memcache
+
+You can use `go get -u -a` for update all installed packages.
+
+### Using *git clone* command:
+
+    $ git clone git://github.com/bradfitz/gomemcache
+    $ cd gomemcache/memcache
+    $ make install
 
 ## Example
 
@@ -29,7 +37,7 @@ After this command *gomemcache* is ready to use. Its source will be in:
 
 ## Full docs, see:
 
-See https://godoc.org/github.com/bradfitz/gomemcache/memcache
+See http://godoc.org/github.com/bradfitz/gomemcache/memcache
 
 Or run:
 
