@@ -65,7 +65,7 @@ var (
 )
 
 // DefaultTimeout is the default socket read/write timeout.
-const DefaultTimeout = 100 * time.Millisecond
+const DefaultTimeout = time.Duration(100) * time.Millisecond
 
 const (
 	buffered            = 8 // arbitrary buffered channel size, for readability
@@ -289,14 +289,10 @@ func (c *Client) getConn(addr net.Addr) (*conn, error) {
 }
 
 func (c *Client) onItem(item *Item, fn func(*Client, *bufio.ReadWriter, *Item) error) error {
-	addr, done, err := c.selector.PickServer(item.Key)
+	addr, err := c.selector.PickServer(item.Key)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		done(err)
-	}()
-
 	cn, err := c.getConn(addr)
 	if err != nil {
 		return err
@@ -338,14 +334,11 @@ func (c *Client) withKeyAddr(key string, fn func(net.Addr) error) (err error) {
 	if !legalKey(key) {
 		return ErrMalformedKey
 	}
-	addr, done, err := c.selector.PickServer(key)
+	addr, err := c.selector.PickServer(key)
 	if err != nil {
 		return err
 	}
-
-	err = fn(addr)
-	done(err)
-	return err
+	return fn(addr)
 }
 
 func (c *Client) withAddrRw(addr net.Addr, fn func(*bufio.ReadWriter) error) (err error) {
@@ -441,26 +434,21 @@ func (c *Client) GetMulti(keys []string) (map[string]*Item, error) {
 	}
 
 	keyMap := make(map[net.Addr][]string)
-	doneMap := make(map[net.Addr]DoneFunc)
 	for _, key := range keys {
 		if !legalKey(key) {
 			return nil, ErrMalformedKey
 		}
-		addr, done, err := c.selector.PickServer(key)
+		addr, err := c.selector.PickServer(key)
 		if err != nil {
 			return nil, err
 		}
 		keyMap[addr] = append(keyMap[addr], key)
-		doneMap[addr] = done
 	}
 
 	ch := make(chan error, buffered)
 	for addr, keys := range keyMap {
 		go func(addr net.Addr, keys []string) {
-			err := c.getFromAddr(addr, keys, addItemToMap)
-			doneMap[addr](err)
-
-			ch <- err
+			ch <- c.getFromAddr(addr, keys, addItemToMap)
 		}(addr, keys)
 	}
 

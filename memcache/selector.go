@@ -17,36 +17,31 @@ limitations under the License.
 package memcache
 
 import (
+	"hash/crc32"
 	"net"
 	"strings"
 	"sync"
-
-	"github.com/hailocab/go-hostpool"
 )
 
 // ServerSelector is the interface that selects a memcache server
 // as a function of the item's key.
 //
-// All ServerSelector implementations must be safe for concurrent use
-// by multiple goroutines.
+// All ServerSelector implementations must be threadsafe.
 type ServerSelector interface {
 	// PickServer returns the server address that a given item
 	// should be shared onto.
-	PickServer(key string) (net.Addr, DoneFunc, error)
+	PickServer(key string) (net.Addr, error)
 	Each(func(net.Addr) error) error
 }
 
-type DoneFunc func(error)
-
 // ServerList is a simple ServerSelector. Its zero value is usable.
 type ServerList struct {
-	mu       sync.RWMutex
-	addrs    map[string]net.Addr
-	hostpool hostpool.HostPool
+	lk    sync.RWMutex
+	addrs []net.Addr
 }
 
 // SetServers changes a ServerList's set of servers at runtime and is
-// safe for concurrent use by multiple goroutines.
+// threadsafe.
 //
 // Each server is given equal weight. A server is given more weight
 // if it's listed multiple times.
@@ -55,38 +50,33 @@ type ServerList struct {
 // resolve. No attempt is made to connect to the server. If any error
 // is returned, no changes are made to the ServerList.
 func (ss *ServerList) SetServers(servers ...string) error {
-	naddr := make(map[string]net.Addr, len(servers))
-	for _, server := range servers {
+	naddr := make([]net.Addr, len(servers))
+	for i, server := range servers {
 		if strings.Contains(server, "/") {
 			addr, err := net.ResolveUnixAddr("unix", server)
 			if err != nil {
 				return err
 			}
-			naddr[server] = addr
+			naddr[i] = addr
 		} else {
 			tcpaddr, err := net.ResolveTCPAddr("tcp", server)
 			if err != nil {
 				return err
 			}
-			naddr[server] = tcpaddr
+			naddr[i] = tcpaddr
 		}
 	}
 
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
+	ss.lk.Lock()
+	defer ss.lk.Unlock()
 	ss.addrs = naddr
-	if ss.hostpool == nil {
-		ss.hostpool = hostpool.New(servers)
-	} else {
-		ss.hostpool.SetHosts(servers)
-	}
 	return nil
 }
 
 // Each iterates over each server calling the given function
 func (ss *ServerList) Each(f func(net.Addr) error) error {
-	ss.mu.RLock()
-	defer ss.mu.RUnlock()
+	ss.lk.RLock()
+	defer ss.lk.RUnlock()
 	for _, a := range ss.addrs {
 		if err := f(a); nil != err {
 			return err
@@ -95,17 +85,13 @@ func (ss *ServerList) Each(f func(net.Addr) error) error {
 	return nil
 }
 
-func (ss *ServerList) PickServer(key string) (net.Addr, DoneFunc, error) {
-	ss.mu.RLock()
-	defer ss.mu.RUnlock()
-	if ss.hostpool == nil || len(ss.hostpool.Hosts()) == 0 {
-		return nil, func(error) {}, ErrNoServers
+func (ss *ServerList) PickServer(key string) (net.Addr, error) {
+	ss.lk.RLock()
+	defer ss.lk.RUnlock()
+	if len(ss.addrs) == 0 {
+		return nil, ErrNoServers
 	}
-
-	hostR := ss.hostpool.Get()
-	if addr, ok := ss.addrs[hostR.Host()]; ok {
-		return addr, hostR.Mark, nil
-	}
-
-	return nil, func(error) {}, ErrNoServers
+	// TODO-GO: remove this copy
+	cs := crc32.ChecksumIEEE([]byte(key))
+	return ss.addrs[cs%uint32(len(ss.addrs))], nil
 }
