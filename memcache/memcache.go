@@ -62,6 +62,9 @@ var (
 
 	// ErrNoServers is returned when no servers are configured or available.
 	ErrNoServers = errors.New("memcache: no servers configured or available")
+
+	// ErrServerUnavailable is returned when the server in unavailable
+	ErrServerUnavailable = errors.New("memcache: server available")
 )
 
 // DefaultTimeout is the default socket read/write timeout.
@@ -289,10 +292,14 @@ func (c *Client) getConn(addr net.Addr) (*conn, error) {
 }
 
 func (c *Client) onItem(item *Item, fn func(*Client, *bufio.ReadWriter, *Item) error) error {
-	addr, err := c.selector.PickServer(item.Key)
+	addr, done, err := c.selector.PickServer(item.Key)
 	if err != nil {
 		return err
 	}
+	defer func() {
+		done(err)
+	}()
+
 	cn, err := c.getConn(addr)
 	if err != nil {
 		return err
@@ -334,11 +341,14 @@ func (c *Client) withKeyAddr(key string, fn func(net.Addr) error) (err error) {
 	if !legalKey(key) {
 		return ErrMalformedKey
 	}
-	addr, err := c.selector.PickServer(key)
+	addr, done, err := c.selector.PickServer(key)
 	if err != nil {
 		return err
 	}
-	return fn(addr)
+
+	err = fn(addr)
+	done(err)
+	return err
 }
 
 func (c *Client) withAddrRw(addr net.Addr, fn func(*bufio.ReadWriter) error) (err error) {
@@ -434,21 +444,26 @@ func (c *Client) GetMulti(keys []string) (map[string]*Item, error) {
 	}
 
 	keyMap := make(map[net.Addr][]string)
+	doneMap := make(map[net.Addr]DoneFunc)
 	for _, key := range keys {
 		if !legalKey(key) {
 			return nil, ErrMalformedKey
 		}
-		addr, err := c.selector.PickServer(key)
+		addr, done, err := c.selector.PickServer(key)
 		if err != nil {
 			return nil, err
 		}
 		keyMap[addr] = append(keyMap[addr], key)
+		doneMap[addr] = done
 	}
 
 	ch := make(chan error, buffered)
 	for addr, keys := range keyMap {
 		go func(addr net.Addr, keys []string) {
-			ch <- c.getFromAddr(addr, keys, addItemToMap)
+			err := c.getFromAddr(addr, keys, addItemToMap)
+			doneMap[addr](err)
+
+			ch <- err
 		}(addr, keys)
 	}
 

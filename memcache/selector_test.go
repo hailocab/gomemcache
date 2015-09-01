@@ -32,7 +32,9 @@ func benchPickServer(b *testing.B, servers ...string) {
 	var ss ServerList
 	ss.SetServers(servers...)
 	for i := 0; i < b.N; i++ {
-		if _, err := ss.PickServer("some key"); err != nil {
+		_, done, err := ss.PickServer("some key")
+		done(err)
+		if err != nil {
 			b.Fatal(err)
 		}
 	}
