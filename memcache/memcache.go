@@ -64,7 +64,7 @@ var (
 	ErrNoServers = errors.New("memcache: no servers configured or available")
 
 	// ErrServerUnavailable is returned when the server in unavailable
-	ErrServerUnavailable = errors.New("memcache: server available")
+	ErrServerUnavailable = errors.New("memcache: server unavailable")
 )
 
 // DefaultTimeout is the default socket read/write timeout.

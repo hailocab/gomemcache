@@ -62,7 +62,7 @@ type ServerList struct {
 func (ss *ServerList) SetServers(servers ...string) error {
 	// Get breaker options
 	cbRate := 0.95
-	cbMinSamples := int64(100)
+	cbMinSamples := int64(25)
 
 	if ss.BreakerRate > 0 {
 		cbRate = ss.BreakerRate
